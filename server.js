@@ -6,8 +6,13 @@ const cookieParser = require("cookie-parser");
 dotenv.config();
 
 const passport = require("./src/config/passport");
-const { testDatabaseConnection } = require("./src/config/database");
+
+const {
+  testDatabaseConnection
+} = require("./src/config/database");
+
 const authRoutes = require("./src/routes/authRoutes");
+const fileRoutes = require("./src/routes/fileRoutes");
 
 const app = express();
 
@@ -21,7 +26,13 @@ app.use(
 );
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+app.use(
+  express.urlencoded({
+    extended: true
+  })
+);
+
 app.use(cookieParser());
 
 app.use(passport.initialize());
@@ -35,6 +46,8 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+
+app.use("/api/files", fileRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -57,11 +70,18 @@ app.use((error, req, res, next) => {
 });
 
 const startServer = async () => {
-  await testDatabaseConnection();
+  try {
+    await testDatabaseConnection();
 
-  app.listen(PORT, () => {
-    console.log(`CloudNest backend running on http://localhost:${PORT}`);
-  });
+    app.listen(PORT, () => {
+      console.log(
+        `CloudNest backend running on http://localhost:${PORT}`
+      );
+    });
+  } catch (error) {
+    console.error("Unable to start server:", error);
+    process.exit(1);
+  }
 };
 
 startServer();
