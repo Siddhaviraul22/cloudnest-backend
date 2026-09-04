@@ -1,4 +1,5 @@
 const express = require("express");
+const passport = require("passport");
 
 const {
   register,
@@ -9,26 +10,22 @@ const {
 } = require("../controllers/authController");
 
 const { setAuthCookies } = require("../utils/auth");
-
-const passport = require("../config/passport");
+const { authenticate } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
+// Email/password authentication
 router.post("/register", register);
-
 router.post("/login", login);
-
 router.post("/logout", logout);
-
-router.get("/me", require("../middleware/authMiddleware").authenticate, getMe);
-
+router.get("/me", authenticate, getMe);
 router.post("/refresh", refresh);
 
+// Google OAuth
 router.get(
   "/google",
   passport.authenticate("google", {
-    scope: ["profile", "email"],
-    session: false
+    scope: ["profile", "email"]
   })
 );
 
