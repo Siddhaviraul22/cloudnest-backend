@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const helmet = require("helmet");
 
 const passport = require("./src/config/passport");
 
@@ -12,19 +13,38 @@ const {
 
 const authRoutes = require("./src/routes/authRoutes");
 const fileRoutes = require("./src/routes/fileRoutes");
+const folderRoutes = require("./src/routes/folderRoutes");
+const shareRoutes = require("./src/routes/shareRoutes");
+const linkShareRoutes = require("./src/routes/linkShareRoutes");
+const dashboardRoutes = require("./src/routes/dashboardRoutes");
+
+const {
+  apiLimiter,
+  uploadLimiter
+} = require("./src/middleware/security");
 
 const app = express();
 
 const PORT = process.env.PORT || 8080;
 
 app.use(
+  helmet({
+    crossOriginResourcePolicy: {
+      policy: "cross-origin"
+    }
+  })
+);
+
+app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin:
+      process.env.CORS_ORIGIN ||
+      "http://localhost:3000",
     credentials: true
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 app.use(
   express.urlencoded({
@@ -36,6 +56,8 @@ app.use(cookieParser());
 
 app.use(passport.initialize());
 
+app.use(apiLimiter);
+
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -44,9 +66,40 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.use("/api/auth", authRoutes);
+app.use(
+  "/api/auth",
+  authRoutes
+);
 
-app.use("/api/files", fileRoutes);
+app.use(
+  "/api/files/init",
+  uploadLimiter
+);
+
+app.use(
+  "/api/files",
+  fileRoutes
+);
+
+app.use(
+  "/api/folders",
+  folderRoutes
+);
+
+app.use(
+  "/api/shares",
+  shareRoutes
+);
+
+app.use(
+  "/api",
+  linkShareRoutes
+);
+
+app.use(
+  "/api",
+  dashboardRoutes
+);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -58,7 +111,10 @@ app.use((req, res) => {
 });
 
 app.use((error, req, res, next) => {
-  console.error("Unhandled server error:", error);
+  console.error(
+    "Unhandled server error:",
+    error
+  );
 
   res.status(500).json({
     error: {
@@ -78,7 +134,11 @@ const startServer = async () => {
       );
     });
   } catch (error) {
-    console.error("Unable to start server:", error);
+    console.error(
+      "Unable to start server:",
+      error
+    );
+
     process.exit(1);
   }
 };

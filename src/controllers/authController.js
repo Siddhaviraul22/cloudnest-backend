@@ -50,31 +50,26 @@ const register = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = await pool.query(
-      `
-      INSERT INTO users (email, name)
-      VALUES ($1, $2)
-      RETURNING id, email, name, image_url, created_at
-      `,
-      [normalizedEmail, name.trim()]
-    );
+  `
+  INSERT INTO users
+    (email, name, password_hash)
+  VALUES
+    ($1, $2, $3)
+  RETURNING
+    id,
+    email,
+    name,
+    image_url,
+    created_at
+  `,
+  [
+    normalizedEmail,
+    name.trim(),
+    passwordHash
+  ]
+);
 
     const user = result.rows[0];
-
-    await pool.query(
-      `
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS password_hash text
-      `
-    );
-
-    await pool.query(
-      `
-      UPDATE users
-      SET password_hash = $1
-      WHERE id = $2
-      `,
-      [passwordHash, user.id]
-    );
 
     setAuthCookies(res, user);
 
