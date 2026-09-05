@@ -147,35 +147,37 @@ const resolveLink = async (req, res) => {
       });
     }
 
-    if (link.password_hash) {
-      const password =
-        req.body?.password ||
-        req.query?.password;
+    const password =
+  req.headers["x-share-password"] ||
+  req.body?.password ||
+  req.query?.password ||
+  "";
 
-      if (!password) {
-        return res.status(401).json({
-          error: {
-            code: "PASSWORD_REQUIRED",
-            message: "Password required"
-          }
-        });
+if (link.password_hash) {
+  if (!password) {
+    return res.status(401).json({
+      error: {
+        code: "PASSWORD_REQUIRED",
+        message: "Password required"
       }
+    });
+  }
 
-      const valid =
-        await bcrypt.compare(
-          password,
-          link.password_hash
-        );
+  const valid =
+    await bcrypt.compare(
+      password,
+      link.password_hash
+    );
 
-      if (!valid) {
-        return res.status(401).json({
-          error: {
-            code: "INVALID_PASSWORD",
-            message: "Invalid share password"
-          }
-        });
+  if (!valid) {
+    return res.status(401).json({
+      error: {
+        code: "INVALID_PASSWORD",
+        message: "Invalid password"
       }
-    }
+    });
+  }
+}
 
     let resource;
 
