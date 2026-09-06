@@ -20,12 +20,12 @@ passport.use(
   "https://openidconnect.googleapis.com/v1/userinfo"
     },
 
-    async (
-      accessToken,
-      refreshToken,
-      profile,
-      done
-    ) => {
+    async (accessToken, refreshToken, profile, done) => {
+  console.log("GOOGLE ACCESS TOKEN RECEIVED:", Boolean(accessToken));
+  console.log(
+    "GOOGLE ACCESS TOKEN LENGTH:",
+    accessToken ? accessToken.length : 0
+  );
       try {
         const email =
           profile.emails?.[0]?.value;
