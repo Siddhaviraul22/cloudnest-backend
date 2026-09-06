@@ -5,7 +5,8 @@ const {
   getActivity,
   getUsage,
   getSummary,
-  findUser
+  findUser,
+  getStarred
 } = require("../controllers/dashboardController");
 
 const { authenticate } = require("../middleware/authMiddleware");
@@ -40,6 +41,11 @@ router.get(
   "/users",
   authenticate,
   findUser
+);
+router.get(
+  "/starred",
+  authenticate,
+  getStarred
 );
 
 module.exports = router;

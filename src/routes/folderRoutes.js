@@ -7,6 +7,9 @@ const {
   updateFolder,
   deleteFolder,
   restoreFolder,
+  permanentlyDeleteFolder,
+  starFolder,
+  unstarFolder,
   listTrashFolders
 } = require("../controllers/folderController");
 
@@ -31,7 +34,17 @@ router.get(
   authenticate,
   listTrashFolders
 );
+router.post(
+  "/:id/star",
+  authenticate,
+  starFolder
+);
 
+router.delete(
+  "/:id/star",
+  authenticate,
+  unstarFolder
+);
 router.get(
   "/:id",
   authenticate,
@@ -49,7 +62,11 @@ router.post(
   authenticate,
   restoreFolder
 );
-
+router.delete(
+  "/:id/permanent",
+  authenticate,
+  permanentlyDeleteFolder
+);
 router.delete(
   "/:id",
   authenticate,

@@ -344,10 +344,69 @@ const findUser = async (req, res) => {
     });
   }
 };
+
+const getStarred = async (req, res) => {
+  try {
+    const [filesResult, foldersResult] =
+      await Promise.all([
+        pool.query(
+          `
+          SELECT
+            f.*,
+            true AS starred
+          FROM files f
+          INNER JOIN stars s
+            ON s.resource_type = 'file'
+            AND s.resource_id = f.id
+            AND s.user_id = $1
+          WHERE f.owner_id = $1
+            AND f.is_deleted = false
+          ORDER BY f.updated_at DESC
+          `,
+          [req.user.id]
+        ),
+
+        pool.query(
+          `
+          SELECT
+            f.*,
+            true AS starred
+          FROM folders f
+          INNER JOIN stars s
+            ON s.resource_type = 'folder'
+            AND s.resource_id = f.id
+            AND s.user_id = $1
+          WHERE f.owner_id = $1
+            AND f.is_deleted = false
+          ORDER BY f.updated_at DESC
+          `,
+          [req.user.id]
+        )
+      ]);
+
+    return res.status(200).json({
+      files: filesResult.rows,
+      folders: foldersResult.rows
+    });
+  } catch (error) {
+    console.error(
+      "Starred resources error:",
+      error
+    );
+
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to load starred items"
+      }
+    });
+  }
+};
 module.exports = {
   search,
   getActivity,
   getUsage,
   getSummary,
-  findUser
+  findUser,
+  getStarred
 };

@@ -1,5 +1,72 @@
 const { pool } = require("../config/database");
 
+const getFolderPermission = async (
+  folderId,
+  userId
+) => {
+  const result = await pool.query(
+    `
+    WITH RECURSIVE ancestors AS (
+      SELECT
+        id,
+        parent_id,
+        owner_id
+      FROM folders
+      WHERE id = $1
+
+      UNION ALL
+
+      SELECT
+        f.id,
+        f.parent_id,
+        f.owner_id
+      FROM folders f
+      INNER JOIN ancestors a
+        ON f.id = a.parent_id
+    )
+    SELECT
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM ancestors
+          WHERE owner_id = $2
+        )
+        THEN 'owner'
+
+        WHEN EXISTS (
+          SELECT 1
+          FROM shares s
+          INNER JOIN ancestors a
+            ON a.id = s.resource_id
+          WHERE s.resource_type = 'folder'
+            AND s.grantee_user_id = $2
+            AND s.role = 'editor'
+        )
+        THEN 'editor'
+
+        WHEN EXISTS (
+          SELECT 1
+          FROM shares s
+          INNER JOIN ancestors a
+            ON a.id = s.resource_id
+          WHERE s.resource_type = 'folder'
+            AND s.grantee_user_id = $2
+            AND s.role = 'viewer'
+        )
+        THEN 'viewer'
+
+        ELSE NULL
+      END AS permission
+    `,
+    [
+      folderId,
+      userId
+    ]
+  );
+
+  return result.rows[0]?.permission || null;
+};
+
 const sanitizeFolderName = (name) => {
   return String(name)
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
@@ -37,7 +104,8 @@ const createFolder = async (req, res) => {
       parentId = null
     } = req.body;
 
-    const safeName = sanitizeFolderName(name || "");
+    const safeName =
+      sanitizeFolderName(name || "");
 
     if (!safeName) {
       return res.status(400).json({
@@ -57,7 +125,10 @@ const createFolder = async (req, res) => {
           AND owner_id = $2
           AND is_deleted = false
         `,
-        [parentId, req.user.id]
+        [
+          parentId,
+          req.user.id
+        ]
       );
 
       if (parent.rows.length === 0) {
@@ -69,6 +140,46 @@ const createFolder = async (req, res) => {
         });
       }
     }
+
+    /*
+     * Prevent duplicate folder names
+     * inside the same parent folder.
+     */
+    const duplicate = await pool.query(
+      `
+      SELECT id
+      FROM folders
+      WHERE owner_id = $1
+        AND parent_id IS NOT DISTINCT FROM $2
+        AND name = $3
+        AND is_deleted = false
+      LIMIT 1
+      `,
+      [
+        req.user.id,
+        parentId,
+        safeName
+      ]
+    );
+
+    if (duplicate.rows.length > 0) {
+      return res.status(409).json({
+        error: {
+          code: "FOLDER_EXISTS",
+          message:
+            "A folder with this name already exists in this location"
+        }
+      });
+    }
+
+    /*
+     * A newly created folder cannot create
+     * a circular relationship because it does
+     * not yet have any children.
+     *
+     * Circular relationships are checked when
+     * an existing folder is moved.
+     */
 
     const result = await pool.query(
       `
@@ -103,17 +214,22 @@ const createFolder = async (req, res) => {
       return res.status(409).json({
         error: {
           code: "FOLDER_EXISTS",
-          message: "A folder with this name already exists"
+          message:
+            "A folder with this name already exists in this location"
         }
       });
     }
 
-    console.error("Create folder error:", error);
+    console.error(
+      "Create folder error:",
+      error
+    );
 
     return res.status(500).json({
       error: {
         code: "INTERNAL_ERROR",
-        message: "Unable to create folder"
+        message:
+          "Unable to create folder"
       }
     });
   }
@@ -121,20 +237,16 @@ const createFolder = async (req, res) => {
 
 const getFolder = async (req, res) => {
   try {
-    const folderId = req.params.id;
+    const folderId =
+      req.params.id;
 
-    const folderResult = await pool.query(
-      `
-      SELECT *
-      FROM folders
-      WHERE id = $1
-        AND owner_id = $2
-        AND is_deleted = false
-      `,
-      [folderId, req.user.id]
-    );
+    const permission =
+      await getFolderPermission(
+        folderId,
+        req.user.id
+      );
 
-    if (folderResult.rows.length === 0) {
+    if (!permission) {
       return res.status(404).json({
         error: {
           code: "FOLDER_NOT_FOUND",
@@ -143,81 +255,135 @@ const getFolder = async (req, res) => {
       });
     }
 
-    const folder = folderResult.rows[0];
+    const folderResult =
+      await pool.query(
+        `
+        SELECT *
+        FROM folders
+        WHERE id = $1
+          AND is_deleted = false
+        `,
+        [folderId]
+      );
 
-    const folders = await pool.query(
-      `
-      SELECT
-        id,
-        name,
-        owner_id,
-        parent_id,
-        created_at,
-        updated_at
-      FROM folders
-      WHERE owner_id = $1
-        AND parent_id = $2
-        AND is_deleted = false
-      ORDER BY name ASC
-      `,
-      [req.user.id, folderId]
-    );
+    if (
+      folderResult.rows.length === 0
+    ) {
+      return res.status(404).json({
+        error: {
+          code: "FOLDER_NOT_FOUND",
+          message: "Folder not found"
+        }
+      });
+    }
 
-    const files = await pool.query(
-      `
-      SELECT
-        f.*,
-        EXISTS (
-          SELECT 1
-          FROM stars s
-          WHERE s.user_id = $1
-            AND s.resource_type = 'file'
-            AND s.resource_id = f.id
-        ) AS starred
-      FROM files f
-      WHERE f.owner_id = $1
-        AND f.folder_id = $2
-        AND f.is_deleted = false
-      ORDER BY f.name ASC
-      `,
-      [req.user.id, folderId]
-    );
+    const folder =
+      folderResult.rows[0];
+
+    const folders =
+      await pool.query(
+        `
+        SELECT
+          f.*,
+          EXISTS (
+            SELECT 1
+            FROM stars s
+            WHERE s.user_id = $1
+              AND s.resource_type = 'folder'
+              AND s.resource_id = f.id
+          ) AS starred
+        FROM folders f
+        WHERE f.owner_id = $2
+          AND f.parent_id = $3
+          AND f.is_deleted = false
+        ORDER BY f.name ASC
+        `,
+        [
+          req.user.id,
+          folder.owner_id,
+          folderId
+        ]
+      );
+
+    const files =
+      await pool.query(
+        `
+        SELECT
+          f.*,
+          EXISTS (
+            SELECT 1
+            FROM stars s
+            WHERE s.user_id = $1
+              AND s.resource_type = 'file'
+              AND s.resource_id = f.id
+          ) AS starred
+        FROM files f
+        WHERE f.owner_id = $2
+          AND f.folder_id = $3
+          AND f.is_deleted = false
+        ORDER BY f.name ASC
+        `,
+        [
+          req.user.id,
+          folder.owner_id,
+          folderId
+        ]
+      );
 
     const path = [];
 
-    let currentId = folderId;
+    let currentId =
+      folderId;
 
     while (currentId) {
-      const current = await pool.query(
-        `
-        SELECT id, name, parent_id
-        FROM folders
-        WHERE id = $1
-          AND owner_id = $2
-          AND is_deleted = false
-        `,
-        [currentId, req.user.id]
-      );
+      const current =
+        await pool.query(
+          `
+          SELECT
+            id,
+            name,
+            parent_id
+          FROM folders
+          WHERE id = $1
+            AND owner_id = $2
+            AND is_deleted = false
+          `,
+          [
+            currentId,
+            folder.owner_id
+          ]
+        );
 
-      if (current.rows.length === 0) {
+      if (
+        current.rows.length === 0
+      ) {
         break;
       }
 
-      path.unshift(current.rows[0]);
+      path.unshift(
+        current.rows[0]
+      );
 
-      currentId = current.rows[0].parent_id;
+      currentId =
+        current.rows[0].parent_id;
     }
 
     return res.status(200).json({
       folder,
+      permission,
       children: {
-        folders: folders.rows,
-        files: files.rows
+        folders:
+          folders.rows,
+        files:
+          files.rows
       },
       path
     });
   } catch (error) {
-    console.error("Get folder error:", error);
+    console.error(
+      "Get folder error:",
+      error
+    );
 
     return res.status(500).json({
       error: {
@@ -335,6 +501,9 @@ const updateFolder = async (req, res) => {
       });
     }
 
+    /*
+     * A folder cannot be its own parent.
+     */
     if (newParentId === folder.id) {
       return res.status(400).json({
         error: {
@@ -364,6 +533,52 @@ const updateFolder = async (req, res) => {
           error: {
             code: "PARENT_FOLDER_NOT_FOUND",
             message: "Destination folder not found"
+          }
+        });
+      }
+
+      /*
+       * Prevent circular folder relationships.
+       *
+       * Example:
+       * A -> B -> C
+       *
+       * A cannot be moved inside B or C.
+       */
+      const circularCheck = await pool.query(
+        `
+        WITH RECURSIVE descendants AS (
+          SELECT id
+          FROM folders
+          WHERE id = $1
+            AND owner_id = $2
+
+          UNION ALL
+
+          SELECT f.id
+          FROM folders f
+          INNER JOIN descendants d
+            ON f.parent_id = d.id
+          WHERE f.owner_id = $2
+        )
+        SELECT id
+        FROM descendants
+        WHERE id = $3
+        LIMIT 1
+        `,
+        [
+          folder.id,
+          req.user.id,
+          newParentId
+        ]
+      );
+
+      if (circularCheck.rows.length > 0) {
+        return res.status(400).json({
+          error: {
+            code: "CIRCULAR_FOLDER_RELATIONSHIP",
+            message:
+              "A folder cannot be moved inside one of its own subfolders"
           }
         });
       }
@@ -426,21 +641,21 @@ const updateFolder = async (req, res) => {
 
 const deleteFolder = async (req, res) => {
   try {
-    const result = await pool.query(
+    const folderId = req.params.id;
+    const ownerId = req.user.id;
+
+    const folderResult = await pool.query(
       `
-      UPDATE folders
-      SET
-        is_deleted = true,
-        updated_at = now()
+      SELECT id, name
+      FROM folders
       WHERE id = $1
         AND owner_id = $2
         AND is_deleted = false
-      RETURNING *
       `,
-      [req.params.id, req.user.id]
+      [folderId, ownerId]
     );
 
-    if (result.rows.length === 0) {
+    if (folderResult.rows.length === 0) {
       return res.status(404).json({
         error: {
           code: "FOLDER_NOT_FOUND",
@@ -449,36 +664,89 @@ const deleteFolder = async (req, res) => {
       });
     }
 
+    /*
+     * Find the selected folder and every
+     * folder underneath it.
+     */
+    const descendantFolders = await pool.query(
+      `
+      WITH RECURSIVE folder_tree AS (
+        SELECT id
+        FROM folders
+        WHERE id = $1
+          AND owner_id = $2
+
+        UNION ALL
+
+        SELECT f.id
+        FROM folders f
+        INNER JOIN folder_tree ft
+          ON f.parent_id = ft.id
+        WHERE f.owner_id = $2
+      )
+      SELECT id
+      FROM folder_tree
+      `,
+      [folderId, ownerId]
+    );
+
+    const folderIds =
+      descendantFolders.rows.map(
+        (row) => row.id
+      );
+
+    /*
+     * Move the entire folder tree to Trash.
+     */
+    await pool.query(
+      `
+      UPDATE folders
+      SET
+        is_deleted = true,
+        updated_at = now()
+      WHERE id = ANY($1::uuid[])
+        AND owner_id = $2
+      `,
+      [folderIds, ownerId]
+    );
+
+    /*
+     * Move all files inside the folder tree
+     * to Trash as well.
+     */
     await pool.query(
       `
       UPDATE files
       SET
         is_deleted = true,
         updated_at = now()
-      WHERE folder_id = $1
+      WHERE folder_id = ANY($1::uuid[])
         AND owner_id = $2
       `,
-      [
-        req.params.id,
-        req.user.id
-      ]
+      [folderIds, ownerId]
     );
 
     await recordActivity(
-      req.user.id,
+      ownerId,
       "delete",
-      req.params.id,
+      folderId,
       {
-        name: result.rows[0].name
+        name: folderResult.rows[0].name
       }
     );
 
     return res.status(200).json({
       message: "Folder moved to trash",
-      folder: result.rows[0]
+      folder: {
+        ...folderResult.rows[0],
+        is_deleted: true
+      }
     });
   } catch (error) {
-    console.error("Delete folder error:", error);
+    console.error(
+      "Delete folder error:",
+      error
+    );
 
     return res.status(500).json({
       error: {
@@ -491,21 +759,21 @@ const deleteFolder = async (req, res) => {
 
 const restoreFolder = async (req, res) => {
   try {
-    const result = await pool.query(
+    const folderId = req.params.id;
+    const ownerId = req.user.id;
+
+    const folderResult = await pool.query(
       `
-      UPDATE folders
-      SET
-        is_deleted = false,
-        updated_at = now()
+      SELECT id, name
+      FROM folders
       WHERE id = $1
         AND owner_id = $2
         AND is_deleted = true
-      RETURNING *
       `,
-      [req.params.id, req.user.id]
+      [folderId, ownerId]
     );
 
-    if (result.rows.length === 0) {
+    if (folderResult.rows.length === 0) {
       return res.status(404).json({
         error: {
           code: "FOLDER_NOT_FOUND",
@@ -514,36 +782,91 @@ const restoreFolder = async (req, res) => {
       });
     }
 
+    /*
+     * Find the selected folder and every
+     * deleted folder underneath it.
+     */
+    const descendantFolders = await pool.query(
+      `
+      WITH RECURSIVE folder_tree AS (
+        SELECT id
+        FROM folders
+        WHERE id = $1
+          AND owner_id = $2
+          AND is_deleted = true
+
+        UNION ALL
+
+        SELECT f.id
+        FROM folders f
+        INNER JOIN folder_tree ft
+          ON f.parent_id = ft.id
+        WHERE f.owner_id = $2
+          AND f.is_deleted = true
+      )
+      SELECT id
+      FROM folder_tree
+      `,
+      [folderId, ownerId]
+    );
+
+    const folderIds =
+      descendantFolders.rows.map(
+        (row) => row.id
+      );
+
+    /*
+     * Restore the entire folder tree.
+     */
+    await pool.query(
+      `
+      UPDATE folders
+      SET
+        is_deleted = false,
+        updated_at = now()
+      WHERE id = ANY($1::uuid[])
+        AND owner_id = $2
+      `,
+      [folderIds, ownerId]
+    );
+
+    /*
+     * Restore all files belonging to
+     * those folders.
+     */
     await pool.query(
       `
       UPDATE files
       SET
         is_deleted = false,
         updated_at = now()
-      WHERE folder_id = $1
+      WHERE folder_id = ANY($1::uuid[])
         AND owner_id = $2
       `,
-      [
-        req.params.id,
-        req.user.id
-      ]
+      [folderIds, ownerId]
     );
 
     await recordActivity(
-      req.user.id,
+      ownerId,
       "restore",
-      req.params.id,
+      folderId,
       {
-        name: result.rows[0].name
+        name: folderResult.rows[0].name
       }
     );
 
     return res.status(200).json({
       message: "Folder restored",
-      folder: result.rows[0]
+      folder: {
+        ...folderResult.rows[0],
+        is_deleted: false
+      }
     });
   } catch (error) {
-    console.error("Restore folder error:", error);
+    console.error(
+      "Restore folder error:",
+      error
+    );
 
     return res.status(500).json({
       error: {
@@ -554,6 +877,197 @@ const restoreFolder = async (req, res) => {
   }
 };
 
+const permanentlyDeleteFolder = async (req, res) => {
+  try {
+    const folderId = req.params.id;
+    const ownerId = req.user.id;
+
+    const folderResult = await pool.query(
+      `
+      SELECT id, name
+      FROM folders
+      WHERE id = $1
+        AND owner_id = $2
+        AND is_deleted = true
+      `,
+      [folderId, ownerId]
+    );
+
+    if (folderResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "FOLDER_NOT_FOUND",
+          message: "Deleted folder not found"
+        }
+      });
+    }
+
+    const descendantFolders = await pool.query(
+      `
+      WITH RECURSIVE folder_tree AS (
+        SELECT id
+        FROM folders
+        WHERE id = $1
+          AND owner_id = $2
+
+        UNION ALL
+
+        SELECT f.id
+        FROM folders f
+        INNER JOIN folder_tree ft
+          ON f.parent_id = ft.id
+        WHERE f.owner_id = $2
+      )
+      SELECT id
+      FROM folder_tree
+      `,
+      [folderId, ownerId]
+    );
+
+    const folderIds =
+      descendantFolders.rows.map(
+        (row) => row.id
+      );
+await recordActivity(
+      ownerId,
+      "delete",
+      folderId,
+      {
+        name: folderResult.rows[0].name
+      }
+    );
+    await pool.query(
+      `
+      DELETE FROM files
+      WHERE folder_id = ANY($1::uuid[])
+        AND owner_id = $2
+      `,
+      [folderIds, ownerId]
+    );
+
+    await pool.query(
+      `
+      DELETE FROM folders
+      WHERE id = ANY($1::uuid[])
+        AND owner_id = $2
+      `,
+      [folderIds, ownerId]
+    );
+
+    
+
+    return res.status(200).json({
+      message: "Folder permanently deleted"
+    });
+  } catch (error) {
+    console.error(
+      "Permanent folder delete error:",
+      error
+    );
+
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to permanently delete folder"
+      }
+    });
+  }
+};
+const starFolder = async (req, res) => {
+  try {
+    const folderId = req.params.id;
+
+    const folderResult = await pool.query(
+      `
+      SELECT id, name
+      FROM folders
+      WHERE id = $1
+        AND owner_id = $2
+        AND is_deleted = false
+      `,
+      [folderId, req.user.id]
+    );
+
+    if (folderResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "FOLDER_NOT_FOUND",
+          message: "Folder not found"
+        }
+      });
+    }
+
+    await pool.query(
+      `
+      INSERT INTO stars
+        (user_id, resource_type, resource_id)
+      VALUES
+        ($1, 'folder', $2)
+      ON CONFLICT (
+        user_id,
+        resource_type,
+        resource_id
+      )
+      DO NOTHING
+      `,
+      [
+        req.user.id,
+        folderId
+      ]
+    );
+
+    return res.status(200).json({
+      message: "Folder starred"
+    });
+  } catch (error) {
+    console.error(
+      "Star folder error:",
+      error
+    );
+
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to star folder"
+      }
+    });
+  }
+};
+
+const unstarFolder = async (req, res) => {
+  try {
+    const folderId = req.params.id;
+
+    await pool.query(
+      `
+      DELETE FROM stars
+      WHERE user_id = $1
+        AND resource_type = 'folder'
+        AND resource_id = $2
+      `,
+      [
+        req.user.id,
+        folderId
+      ]
+    );
+
+    return res.status(200).json({
+      message: "Folder unstarred"
+    });
+  } catch (error) {
+    console.error(
+      "Unstar folder error:",
+      error
+    );
+
+    return res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to unstar folder"
+      }
+    });
+  }
+};
 const listTrashFolders = async (req, res) => {
   try {
     const result = await pool.query(
@@ -589,5 +1103,8 @@ module.exports = {
   updateFolder,
   deleteFolder,
   restoreFolder,
+  permanentlyDeleteFolder,
+  starFolder,
+  unstarFolder,
   listTrashFolders
 };
