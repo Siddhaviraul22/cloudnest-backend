@@ -25,7 +25,8 @@ router.post("/refresh", refresh);
 router.get(
   "/google",
   passport.authenticate("google", {
-    scope: ["profile", "email"]
+    scope: ["openid", "profile", "email"],
+    session: false
   })
 );
 
@@ -33,12 +34,15 @@ router.get(
   "/google/callback",
   passport.authenticate("google", {
     session: false,
-    failureRedirect: "http://localhost:3000/login"
+    failureRedirect:
+      "https://cloudnest-frontend-ten.vercel.app/login"
   }),
   (req, res) => {
     setAuthCookies(res, req.user);
 
-    res.redirect("http://localhost:3000/dashboard");
+    res.redirect(
+      "https://cloudnest-frontend-ten.vercel.app/dashboard"
+    );
   }
 );
 

@@ -17,7 +17,7 @@ passport.use(
         process.env.GOOGLE_CALLBACK_URL,
 
       userProfileURL:
-        "https://openidconnect.googleapis.com/v1/userinfo"
+  "https://openidconnect.googleapis.com/v1/userinfo"
     },
 
     async (
