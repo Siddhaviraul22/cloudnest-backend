@@ -17,15 +17,15 @@ passport.use(
         process.env.GOOGLE_CALLBACK_URL,
 
       userProfileURL:
-  "https://openidconnect.googleapis.com/v1/userinfo"
+        "https://openidconnect.googleapis.com/v1/userinfo"
     },
 
-    async (accessToken, refreshToken, profile, done) => {
-  console.log("GOOGLE ACCESS TOKEN RECEIVED:", Boolean(accessToken));
-  console.log(
-    "GOOGLE ACCESS TOKEN LENGTH:",
-    accessToken ? accessToken.length : 0
-  );
+    async (
+      accessToken,
+      refreshToken,
+      profile,
+      done
+    ) => {
       try {
         const email =
           profile.emails?.[0]?.value;
@@ -50,11 +50,7 @@ passport.use(
         const existingUser =
           await pool.query(
             `
-            SELECT
-              id,
-              email,
-              name,
-              image_url
+            SELECT id, email, name, image_url
             FROM users
             WHERE email = $1
             `,
@@ -75,17 +71,9 @@ passport.use(
               (email, name, image_url)
             VALUES
               ($1, $2, $3)
-            RETURNING
-              id,
-              email,
-              name,
-              image_url
+            RETURNING id, email, name, image_url
             `,
-            [
-              email,
-              name,
-              imageUrl
-            ]
+            [email, name, imageUrl]
           );
 
         return done(
