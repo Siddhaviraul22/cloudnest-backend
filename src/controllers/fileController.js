@@ -207,15 +207,16 @@ const initUpload = async (req, res) => {
     }
 
     return res.status(201).json({
-      fileId,
-      upload: {
-        method: "signed",
-        token: data.token,
-        path: storageKey
-      },
-      storageKey,
-      file: fileResult.rows[0]
-    });
+  fileId,
+  upload: {
+    method: "signed",
+    token: data.token,
+    signedUrl: data.signedUrl,
+    path: storageKey
+  },
+  storageKey,
+  file: fileResult.rows[0]
+});
   } catch (error) {
     console.error("Init upload error:", error);
 
@@ -902,7 +903,8 @@ const listTrash = async (req, res) => {
         size_bytes,
         folder_id,
         created_at,
-        updated_at
+        updated_at,
+        is_deleted
       FROM files
       WHERE owner_id = $1
         AND is_deleted = true
@@ -915,7 +917,10 @@ const listTrash = async (req, res) => {
       files: result.rows
     });
   } catch (error) {
-    console.error("List trash error:", error);
+    console.error(
+      "List trash error:",
+      error
+    );
 
     return res.status(500).json({
       error: {

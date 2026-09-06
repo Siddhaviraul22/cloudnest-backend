@@ -13,6 +13,13 @@ const {
 
 const authRoutes = require("./src/routes/authRoutes");
 const fileRoutes = require("./src/routes/fileRoutes");
+const {
+  listTrash
+} = require("./src/controllers/fileController");
+
+const {
+  authenticate
+} = require("./src/middleware/authMiddleware");
 const folderRoutes = require("./src/routes/folderRoutes");
 const shareRoutes = require("./src/routes/shareRoutes");
 const linkShareRoutes = require("./src/routes/linkShareRoutes");
